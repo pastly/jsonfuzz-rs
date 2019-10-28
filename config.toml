@@ -1,0 +1,4 @@
+[age]
+type = 'u8'
+[bbb]
+type = 'i32'
