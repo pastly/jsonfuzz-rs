@@ -63,7 +63,7 @@ impl Config {
             return Err(());
         }
         // start will be at least the first byte after all the flag bytes at the front
-        let mut start = keys.len();
+        let mut start = self.keys().len();
         // iterate through keys until we find the one that matches the given key
         for key_i in keys {
             let val_type = self.inner[&key_i]["type"]
