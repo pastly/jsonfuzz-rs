@@ -1,3 +1,7 @@
+[aa]
+type = 'str'
+[zz]
+type = 'str'
 [age]
 type = 'u8'
 [bbb]

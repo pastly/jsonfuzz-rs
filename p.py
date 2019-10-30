@@ -8,6 +8,6 @@ if not conf:
     exit(1)
 
 # create_string_buffer adds a \x00 to the end. take all but that null
-conf_buf = create_string_buffer(b'\x01\x01\xff\x00\x00\x00\x33')[:-1]
+conf_buf = create_string_buffer(b'\x01\x01\x01\x01MATT\x00\xff\x00\x00\x00\x33hello\x00')[:-1]
 lib.parse_buf(conf, conf_buf, len(conf_buf))
 lib.free_config(conf)

@@ -11,6 +11,7 @@ pub enum ValType {
     U32,
     I8,
     I32,
+    Str0,
 }
 
 impl FromStr for ValType {
@@ -21,6 +22,7 @@ impl FromStr for ValType {
             "u32" => Ok(ValType::U32),
             "i8" => Ok(ValType::I8),
             "i32" => Ok(ValType::I32),
+            "str" => Ok(ValType::Str0),
             _ => Err(()),
         }
     }
@@ -56,6 +58,27 @@ impl Config {
         found
     }
 
+    /// Calculate the length, in bytes, of the value matching type val_type. If it is of variable
+    /// length (e.g. a null-terminated string), it must start at the beginning of the given buf so
+    /// we can use it to determine its length.
+    fn value_len(val_type: &ValType, buf: &[u8]) -> usize {
+        match val_type {
+            ValType::I8 | ValType::U8 => 1,
+            ValType::I32 | ValType::U32 => 4,
+            ValType::Str0 => {
+                // a null-terminated string. its length includes the null
+                let mut len = 1;
+                let mut i = 0;
+                while buf[i] > 0 {
+                    i += 1;
+                    len += 1;
+                }
+                len
+            },
+        }
+
+    }
+
     /// Calculate the start and end byte index of the given key: [start, end). Start is
     /// the index of the first byte and end is the index just after the last byte. Returns Err if
     /// the given key does not exist in the buf
@@ -75,17 +98,11 @@ impl Config {
                 .unwrap(); // assumes validate_config was called which requires valid ValType
             if key_i != key {
                 // if not our key, calculate offset to add to start
-                start += match val_type {
-                    ValType::I8 | ValType::U8 => 1,
-                    ValType::I32 | ValType::U32 => 4,
-                };
+                start += Config::value_len(&val_type, &buf[start..]);
+                assert!(start < buf.len());
             } else {
                 // we found our key. Now calculate end
-                let end = start
-                    + match val_type {
-                        ValType::I8 | ValType::U8=> 1,
-                        ValType::I32 | ValType::U32 => 4,
-                    };
+                let end = start + Config::value_len(&val_type, &buf[start..]);
                 assert!(start < buf.len());
                 assert!(end <= buf.len());
                 return Ok((val_type, start, end));
@@ -207,6 +224,11 @@ pub extern "C" fn parse_buf(conf_ptr: *const Config, buf: *const u8, buf_len: us
                             ((buf[start+2] as i32) <<  8) |
                             ((buf[start+3] as i32) <<  0);
                         dict.insert(key.clone(), Value::Integer(v as i64));
+                    }
+                    ValType::Str0 => {
+                        assert_eq!(buf[end-1], 0x00);
+                        let s = String::from_utf8_lossy(&buf[start..end-1]).to_string();
+                        dict.insert(key.clone(), Value::String(s));
                     }
                 }
                 eprintln!("{} ({}) is a {:?} at [{}, {})", key, dict[&key], val_type, start, end);
