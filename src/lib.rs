@@ -46,7 +46,9 @@ impl Config {
         let mut found = vec![];
         let mut i = 0;
         for k in self.keys() {
-            if buf[i] != 0 {
+            // only bit that determines whether the key is contained in the buf is the last bit of
+            // the byte
+            if (buf[i] & 0x01) != 0 {
                 found.push(k.clone());
             }
             i += 1;
