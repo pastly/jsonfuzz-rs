@@ -4,6 +4,8 @@ use std::slice;
 use std::str::FromStr;
 use toml::value::{Table, Value};
 use std::collections::HashMap;
+use std::ffi::{CStr, CString};
+use std::os::raw::c_char;
 
 #[derive(Debug)]
 pub enum ValType {
@@ -155,11 +157,8 @@ fn _load_config(fname: &str) -> Result<Config, Box<dyn std::error::Error + 'stat
     Ok(Config::new(data.as_table().unwrap().clone()))
 }
 
-use std::ffi::CStr;
-use std::os::raw::c_char;
-
 #[no_mangle]
-pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
+pub extern fn load_config(fname_in: *const c_char) -> *const Config {
     let fname = unsafe {
         match CStr::from_ptr(fname_in).to_str() {
             Ok(f) => f,
@@ -190,11 +189,7 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
     Box::into_raw(conf_box)
 }
 
-#[no_mangle]
-pub extern "C" fn parse_buf(conf_ptr: *const Config, buf: *const u8, buf_len: usize) {
-    println!("{}", buf_len);
-    let conf = unsafe { &*conf_ptr };
-    let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
+fn _to_json(conf: &Config, buf: &[u8]) -> String {
     let keys = conf.contained_keys(buf);
     let mut dict: HashMap<String, Value> = HashMap::new();
     for key in keys {
@@ -238,13 +233,31 @@ pub extern "C" fn parse_buf(conf_ptr: *const Config, buf: *const u8, buf_len: us
             },
         };
     }
-    println!("{}", serde_json::to_string_pretty(&dict).unwrap());
+    serde_json::to_string_pretty(&dict).unwrap()
+    //serde_json::to_string(&dict).unwrap()
 }
 
 #[no_mangle]
-pub extern "C" fn free_config(conf_ptr: *mut Config) {
+pub extern fn to_json(conf_ptr: *const Config, buf: *const u8, buf_len: usize) -> *const c_char {
+    println!("{}", buf_len);
+    let conf = unsafe { &*conf_ptr };
+    let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
+    let s = _to_json(conf, buf);
+    let c_str = CString::new(s).unwrap();
+    c_str.into_raw()
+}
+
+#[no_mangle]
+pub extern fn free_config(conf_ptr: *mut Config) {
     unsafe {
         drop(Box::from_raw(conf_ptr));
+    }
+}
+
+#[no_mangle]
+pub extern fn free_string(s: *mut c_char) {
+    unsafe {
+        drop(CString::from_raw(s));
     }
 }
 
