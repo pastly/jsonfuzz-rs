@@ -84,6 +84,8 @@ impl Config {
                         ValType::I8 | ValType::U8=> 1,
                         ValType::I32 | ValType::U32 => 4,
                     };
+                assert!(start < buf.len());
+                assert!(end <= buf.len());
                 return Ok((val_type, start, end));
             }
         }
@@ -171,8 +173,6 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
 
 #[no_mangle]
 pub extern "C" fn parse_buf(conf_ptr: *const Config, buf: *const u8, buf_len: usize) {
-    // TODO: buf needs a length param otherwise we don't know how big it is and will happily read
-    // garbage memory
     println!("{}", buf_len);
     let conf = unsafe { &*conf_ptr };
     let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
