@@ -1,5 +1,6 @@
 use std::fs;
 use std::ptr;
+use std::slice;
 use std::str::FromStr;
 use toml::value::{Table, Value};
 use std::collections::HashMap;
@@ -169,10 +170,12 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
 }
 
 #[no_mangle]
-pub extern "C" fn parse_buf(conf_ptr: *const Config, buf: &[u8]) {
+pub extern "C" fn parse_buf(conf_ptr: *const Config, buf: *const u8, buf_len: usize) {
     // TODO: buf needs a length param otherwise we don't know how big it is and will happily read
     // garbage memory
+    println!("{}", buf_len);
     let conf = unsafe { &*conf_ptr };
+    let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
     let keys = conf.contained_keys(buf);
     let mut dict: HashMap<String, Value> = HashMap::new();
     for key in keys {
