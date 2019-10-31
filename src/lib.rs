@@ -151,7 +151,7 @@ fn validate_config(c: &Config) -> Result<(), Vec<String>> {
 }
 
 fn _load_config(fname: &str) -> Result<Config, Box<dyn std::error::Error + 'static>> {
-    println!("Loading config from {}", fname);
+    eprintln!("Loading config from {}", fname);
     let data = fs::read_to_string(fname)?.parse::<Value>()?;
     Ok(Config::new(data.as_table().unwrap().clone()))
 }
