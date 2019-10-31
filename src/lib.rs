@@ -1,3 +1,4 @@
+use serde_json;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::fs;
@@ -6,6 +7,8 @@ use std::ptr;
 use std::slice;
 use std::str::FromStr;
 use toml::value::{Table, Value};
+
+type Map = serde_json::map::Map<String, serde_json::value::Value>;
 
 #[derive(Debug)]
 pub enum ValType {
@@ -188,7 +191,7 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
     Box::into_raw(conf_box)
 }
 
-fn _to_json(conf: &Config, buf: &[u8]) -> String {
+fn _to_json(conf: &Config, buf: &[u8]) -> Map {
     let keys = conf.contained_keys(buf);
     let mut dict: HashMap<String, Value> = HashMap::new();
     for key in keys {
@@ -233,7 +236,8 @@ fn _to_json(conf: &Config, buf: &[u8]) -> String {
             }
         };
     }
-    serde_json::to_string_pretty(&dict).unwrap()
+    serde_json::json!(dict).as_object().unwrap().clone()
+    //serde_json::to_string_pretty(&dict).unwrap()
     //serde_json::to_string(&dict).unwrap()
 }
 
@@ -245,12 +249,13 @@ pub extern "C" fn to_json(
 ) -> *const c_char {
     let conf = unsafe { &*conf_ptr };
     let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
-    let s = _to_json(conf, buf);
+    let j = _to_json(conf, buf);
+    let s = serde_json::to_string_pretty(&j).unwrap();
     let c_str = CString::new(s).unwrap();
     c_str.into_raw()
 }
 
-fn _from_json(conf: &Config, json: Table) -> Vec<u8> {
+fn _from_json(conf: &Config, json: Map) -> Vec<u8> {
     let mut header_buf = vec![];
     let mut body_buf = vec![];
     // quick sanity check: make sure all keys in the json are known in the config
@@ -267,15 +272,15 @@ fn _from_json(conf: &Config, json: Table) -> Vec<u8> {
                 .unwrap()
             {
                 ValType::I8 | ValType::U8 => {
-                    let i = json[conf_key].as_integer().unwrap();
-                    body_buf.push((i & 0x000000ff) as u8);
+                    let i = json[conf_key].as_i64().unwrap();
+                    body_buf.push(i as u8);
                 }
                 ValType::I32 | ValType::U32 => {
-                    let i = json[conf_key].as_integer().unwrap();
-                    body_buf.push((i & 0xff000000) as u8);
-                    body_buf.push((i & 0x00ff0000) as u8);
-                    body_buf.push((i & 0x0000ff00) as u8);
-                    body_buf.push((i & 0x000000ff) as u8);
+                    let i = json[conf_key].as_i64().unwrap();
+                    body_buf.push((i >> 24) as u8);
+                    body_buf.push((i >> 16) as u8);
+                    body_buf.push((i >> 8) as u8);
+                    body_buf.push(i as u8);
                 }
                 ValType::Str0 => {
                     let s = json[conf_key].as_str().unwrap();
@@ -304,7 +309,7 @@ pub extern "C" fn from_json(
 ) -> *const u8 {
     let conf = unsafe { &*conf_ptr };
     let json_str = unsafe { CStr::from_ptr(json_c_str) }.to_str().unwrap();
-    let json: Table = serde_json::from_str(json_str).unwrap();
+    let json = serde_json::from_str(json_str).unwrap();
     let out = _from_json(conf, json);
     assert_eq!(out.len(), out.capacity());
     unsafe {
@@ -338,9 +343,123 @@ pub extern "C" fn free_byte_vec(v: *mut u8, len: usize) {
 }
 
 #[cfg(test)]
-mod tests {
+mod identity_tests {
+    use super::Config;
+
+    fn c(s: &str) -> Config {
+        use super::validate_config;
+        use toml::value::Value;
+        let c = Config::new(s.parse::<Value>().unwrap().as_table().unwrap().clone());
+        assert!(validate_config(&c).is_ok());
+        c
+    }
+
+    fn json_identity(conf: &Config, s: &str) {
+        use super::Map;
+        use super::{_from_json, _to_json};
+        let json_in: Map = serde_json::from_str(s).unwrap();
+        let json_out = _to_json(&conf, &_from_json(&conf, json_in.clone()));
+        assert_eq!(json_in, json_out);
+    }
+
+    fn bytes_identity(conf: &Config, bytes_in: Vec<u8>) {
+        use super::{_from_json, _to_json};
+        let bytes_out = _from_json(&conf, _to_json(&conf, &bytes_in));
+        assert_eq!(bytes_in, bytes_out);
+    }
+
     #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+    fn u8() {
+        let conf = c("[a]\ntype = 'u8'");
+        for i in 0..=255u8 {
+            let json_str = format!(r#"{{"a": {}}}"#, i);
+            json_identity(&conf, &json_str);
+            bytes_identity(&conf, vec![1u8, i]);
+        }
+    }
+
+    #[test]
+    fn i8() {
+        let conf = c("[a]\ntype = 'i8'");
+        for i in 0..=255u8 {
+            let json_str = format!(r#"{{"a": {}}}"#, i as i8);
+            json_identity(&conf, &json_str);
+            bytes_identity(&conf, vec![1u8, i]);
+        }
+    }
+
+    #[test]
+    fn u32() {
+        let conf = c("[a]\ntype = 'u32'");
+        for i in vec![0u32, 1, 100, 1_000_000, 999_999_999, u32::max_value()] {
+            let json_str = format!(r#"{{"a": {}}}"#, i);
+            json_identity(&conf, &json_str);
+            bytes_identity(
+                &conf,
+                vec![
+                    1u8,
+                    (i >> 24) as u8,
+                    (i >> 16) as u8,
+                    (i >> 8) as u8,
+                    i as u8,
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn i32() {
+        let conf = c("[a]\ntype = 'i32'");
+        for i in vec![
+            0i32,
+            -1,
+            1,
+            1_000_000,
+            -1_000_000,
+            999_999_999,
+            -999_999_999,
+            i32::min_value(),
+            i32::max_value(),
+        ] {
+            let json_str = format!(r#"{{"a": {}}}"#, i);
+            json_identity(&conf, &json_str);
+            bytes_identity(
+                &conf,
+                vec![
+                    1u8,
+                    (i >> 24) as u8,
+                    (i >> 16) as u8,
+                    (i >> 8) as u8,
+                    i as u8,
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn str0() {
+        let conf = c("[a]\ntype = 'str'");
+        for s in vec!["", "h", "hello", "a b", " a "] {
+            let json_str = format!(r#"{{"a": "{}"}}"#, s);
+            json_identity(&conf, &json_str);
+            let mut bytes = vec![0x01];
+            bytes.extend(s.bytes());
+            bytes.push(0x00);
+            bytes_identity(&conf, bytes);
+        }
+    }
+
+    #[test]
+    fn empty() {
+        for c_str in vec![
+            "",
+            "[a]\ntype = 'u32'",
+            "[a]\ntype = 'u32'\n[b]\ntype = 'i8'",
+            "[a]\ntype = 'u32'\n[b]\ntype = 'i8'\n[c]\ntype = 'str'",
+        ] {
+            let conf = c(c_str);
+            json_identity(&conf, "{}");
+            bytes_identity(&conf, vec![0x00; conf.keys().len()]);
+        }
     }
 }
