@@ -1,11 +1,11 @@
+use std::collections::HashMap;
+use std::ffi::{CStr, CString};
 use std::fs;
+use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
 use std::str::FromStr;
 use toml::value::{Table, Value};
-use std::collections::HashMap;
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
 
 #[derive(Debug)]
 pub enum ValType {
@@ -76,9 +76,8 @@ impl Config {
                     len += 1;
                 }
                 len
-            },
+            }
         }
-
     }
 
     /// Calculate the start and end byte index of the given key: [start, end). Start is
@@ -158,7 +157,7 @@ fn _load_config(fname: &str) -> Result<Config, Box<dyn std::error::Error + 'stat
 }
 
 #[no_mangle]
-pub extern fn load_config(fname_in: *const c_char) -> *const Config {
+pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
     let fname = unsafe {
         match CStr::from_ptr(fname_in).to_str() {
             Ok(f) => f,
@@ -201,11 +200,10 @@ fn _to_json(conf: &Config, buf: &[u8]) -> String {
                         dict.insert(key.clone(), Value::Integer(v as i64));
                     }
                     ValType::U32 => {
-                        let v =
-                            ((buf[start+0] as u32) << 24) |
-                            ((buf[start+1] as u32) << 16) |
-                            ((buf[start+2] as u32) <<  8) |
-                            ((buf[start+3] as u32) <<  0);
+                        let v = ((buf[start + 0] as u32) << 24)
+                            | ((buf[start + 1] as u32) << 16)
+                            | ((buf[start + 2] as u32) << 8)
+                            | ((buf[start + 3] as u32) << 0);
                         dict.insert(key.clone(), Value::Integer(v as i64));
                     }
                     ValType::I8 => {
@@ -213,24 +211,26 @@ fn _to_json(conf: &Config, buf: &[u8]) -> String {
                         dict.insert(key.clone(), Value::Integer(v as i64));
                     }
                     ValType::I32 => {
-                        let v =
-                            ((buf[start+0] as i32) << 24) |
-                            ((buf[start+1] as i32) << 16) |
-                            ((buf[start+2] as i32) <<  8) |
-                            ((buf[start+3] as i32) <<  0);
+                        let v = ((buf[start + 0] as i32) << 24)
+                            | ((buf[start + 1] as i32) << 16)
+                            | ((buf[start + 2] as i32) << 8)
+                            | ((buf[start + 3] as i32) << 0);
                         dict.insert(key.clone(), Value::Integer(v as i64));
                     }
                     ValType::Str0 => {
-                        assert_eq!(buf[end-1], 0x00);
-                        let s = String::from_utf8_lossy(&buf[start..end-1]).to_string();
+                        assert_eq!(buf[end - 1], 0x00);
+                        let s = String::from_utf8_lossy(&buf[start..end - 1]).to_string();
                         dict.insert(key.clone(), Value::String(s));
                     }
                 }
-                eprintln!("{} ({}) is a {:?} at [{}, {})", key, dict[&key], val_type, start, end);
-            },
+                eprintln!(
+                    "{} ({}) is a {:?} at [{}, {})",
+                    key, dict[&key], val_type, start, end
+                );
+            }
             Err(_) => {
                 eprintln!("Err with key {}", key);
-            },
+            }
         };
     }
     serde_json::to_string_pretty(&dict).unwrap()
@@ -238,8 +238,11 @@ fn _to_json(conf: &Config, buf: &[u8]) -> String {
 }
 
 #[no_mangle]
-pub extern fn to_json(conf_ptr: *const Config, buf: *const u8, buf_len: usize) -> *const c_char {
-    println!("{}", buf_len);
+pub extern "C" fn to_json(
+    conf_ptr: *const Config,
+    buf: *const u8,
+    buf_len: usize,
+) -> *const c_char {
     let conf = unsafe { &*conf_ptr };
     let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
     let s = _to_json(conf, buf);
@@ -247,17 +250,90 @@ pub extern fn to_json(conf_ptr: *const Config, buf: *const u8, buf_len: usize) -
     c_str.into_raw()
 }
 
+fn _from_json(conf: &Config, json: Table) -> Vec<u8> {
+    let mut header_buf = vec![];
+    let mut body_buf = vec![];
+    // quick sanity check: make sure all keys in the json are known in the config
+    for json_key in json.keys() {
+        assert!(conf.keys().contains(&json_key));
+    }
+    for conf_key in conf.keys() {
+        if json.contains_key(conf_key) {
+            header_buf.push(0x01);
+            match conf.inner[conf_key]["type"]
+                .as_str()
+                .unwrap()
+                .parse::<ValType>()
+                .unwrap()
+            {
+                ValType::I8 | ValType::U8 => {
+                    let i = json[conf_key].as_integer().unwrap();
+                    body_buf.push((i & 0x000000ff) as u8);
+                }
+                ValType::I32 | ValType::U32 => {
+                    let i = json[conf_key].as_integer().unwrap();
+                    body_buf.push((i & 0xff000000) as u8);
+                    body_buf.push((i & 0x00ff0000) as u8);
+                    body_buf.push((i & 0x0000ff00) as u8);
+                    body_buf.push((i & 0x000000ff) as u8);
+                }
+                ValType::Str0 => {
+                    let s = json[conf_key].as_str().unwrap();
+                    body_buf.extend_from_slice(s.as_bytes());
+                    body_buf.push(0x00);
+                }
+            };
+        } else {
+            header_buf.push(0x00);
+        }
+    }
+    eprintln!("{:?}", header_buf);
+    eprintln!("{:?}", body_buf);
+    let mut buf = header_buf;
+    buf.append(&mut body_buf);
+    buf.shrink_to_fit();
+    assert_eq!(buf.len(), buf.capacity());
+    buf
+}
+
 #[no_mangle]
-pub extern fn free_config(conf_ptr: *mut Config) {
+pub extern "C" fn from_json(
+    conf_ptr: *const Config,
+    json_c_str: *mut c_char,
+    buf_len_out: *mut usize,
+) -> *const u8 {
+    let conf = unsafe { &*conf_ptr };
+    let json_str = unsafe { CStr::from_ptr(json_c_str) }.to_str().unwrap();
+    let json: Table = serde_json::from_str(json_str).unwrap();
+    let out = _from_json(conf, json);
+    assert_eq!(out.len(), out.capacity());
+    unsafe {
+        *buf_len_out = out.len();
+    }
+    eprintln!("{:?}", out);
+    let ret = out.as_ptr();
+    std::mem::forget(out);
+    ret
+}
+
+#[no_mangle]
+pub extern "C" fn free_config(conf_ptr: *mut Config) {
     unsafe {
         drop(Box::from_raw(conf_ptr));
     }
 }
 
 #[no_mangle]
-pub extern fn free_string(s: *mut c_char) {
+pub extern "C" fn free_string(s: *mut c_char) {
     unsafe {
         drop(CString::from_raw(s));
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn free_byte_vec(v: *mut u8, len: usize) {
+    unsafe {
+        drop(Vec::from_raw_parts(v, len, len));
     }
 }
 
