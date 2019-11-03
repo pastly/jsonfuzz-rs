@@ -343,16 +343,22 @@ pub extern "C" fn free_byte_vec(v: *mut u8, len: usize) {
 }
 
 #[cfg(test)]
-mod identity_tests {
+mod test_utils {
     use super::Config;
 
-    fn c(s: &str) -> Config {
+    pub fn c(s: &str) -> Config {
         use super::validate_config;
         use toml::value::Value;
         let c = Config::new(s.parse::<Value>().unwrap().as_table().unwrap().clone());
         assert!(validate_config(&c).is_ok());
         c
     }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::Config;
+    use super::test_utils::c;
 
     fn json_identity(conf: &Config, s: &str) {
         use super::Map;
@@ -461,5 +467,24 @@ mod identity_tests {
             json_identity(&conf, "{}");
             bytes_identity(&conf, vec![0x00; conf.keys().len()]);
         }
+    }
+}
+
+#[cfg(test)]
+mod malformed_tests {
+    use super::test_utils::c;
+    use super::_to_json;
+
+    #[test]
+    fn str0() {
+        let conf = c("[a]\ntype = 'str'");
+        let mut bytes_in = vec![0x01];
+        bytes_in.extend("hello".bytes());
+        //bytes_in.push(0x00);
+        //bytes_in.push(0x00);
+        //bytes_in.push(0x00);
+        let json_out = _to_json(&conf, &bytes_in);
+        println!("{:?}", json_out);
+        assert!(false);
     }
 }
