@@ -16,7 +16,7 @@ pub enum ValType {
     U32,
     I8,
     I32,
-    Str0,
+    Utf8Str0,
 }
 
 impl FromStr for ValType {
@@ -27,7 +27,7 @@ impl FromStr for ValType {
             "u32" => Ok(ValType::U32),
             "i8" => Ok(ValType::I8),
             "i32" => Ok(ValType::I32),
-            "str" => Ok(ValType::Str0),
+            "utf8str" => Ok(ValType::Utf8Str0),
             _ => Err(()),
         }
     }
@@ -70,7 +70,7 @@ impl Config {
         match val_type {
             ValType::I8 | ValType::U8 => 1,
             ValType::I32 | ValType::U32 => 4,
-            ValType::Str0 => {
+            ValType::Utf8Str0 => {
                 // a null-terminated string. its length includes the null
                 let mut len = 1;
                 let mut i = 0;
@@ -220,7 +220,7 @@ fn _to_json(conf: &Config, buf: &[u8]) -> Map {
                             | ((buf[start + 3] as i32) << 0);
                         dict.insert(key.clone(), Value::Integer(v as i64));
                     }
-                    ValType::Str0 => {
+                    ValType::Utf8Str0 => {
                         assert_eq!(buf[end - 1], 0x00);
                         let s = String::from_utf8_lossy(&buf[start..end - 1]).to_string();
                         dict.insert(key.clone(), Value::String(s));
@@ -282,7 +282,7 @@ fn _from_json(conf: &Config, json: Map) -> Vec<u8> {
                     body_buf.push((i >> 8) as u8);
                     body_buf.push(i as u8);
                 }
-                ValType::Str0 => {
+                ValType::Utf8Str0 => {
                     let s = json[conf_key].as_str().unwrap();
                     body_buf.extend_from_slice(s.as_bytes());
                     body_buf.push(0x00);
@@ -443,8 +443,8 @@ mod identity_tests {
     }
 
     #[test]
-    fn str0() {
-        let conf = c("[a]\ntype = 'str'");
+    fn utf8str() {
+        let conf = c("[a]\ntype = 'utf8str'");
         for s in vec!["", "h", "hello", "a b", " a "] {
             let json_str = format!(r#"{{"a": "{}"}}"#, s);
             json_identity(&conf, &json_str);
@@ -461,7 +461,7 @@ mod identity_tests {
             "",
             "[a]\ntype = 'u32'",
             "[a]\ntype = 'u32'\n[b]\ntype = 'i8'",
-            "[a]\ntype = 'u32'\n[b]\ntype = 'i8'\n[c]\ntype = 'str'",
+            "[a]\ntype = 'u32'\n[b]\ntype = 'i8'\n[c]\ntype = 'utf8str'",
         ] {
             let conf = c(c_str);
             json_identity(&conf, "{}");
@@ -476,8 +476,8 @@ mod malformed_tests {
     use super::_to_json;
 
     #[test]
-    fn str0() {
-        let conf = c("[a]\ntype = 'str'");
+    fn utf8str() {
+        let conf = c("[a]\ntype = 'utf8str'");
         let mut bytes_in = vec![0x01];
         bytes_in.extend("hello".bytes());
         //bytes_in.push(0x00);
