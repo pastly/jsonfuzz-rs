@@ -191,7 +191,7 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
     Box::into_raw(conf_box)
 }
 
-fn _to_json(conf: &Config, buf: &[u8]) -> Map {
+fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, Box<dyn std::error::Error + 'static>> {
     let keys = conf.contained_keys(buf);
     let mut dict: HashMap<String, Value> = HashMap::new();
     for key in keys {
@@ -222,7 +222,7 @@ fn _to_json(conf: &Config, buf: &[u8]) -> Map {
                     }
                     ValType::Utf8Str0 => {
                         assert_eq!(buf[end - 1], 0x00);
-                        let s = String::from_utf8_lossy(&buf[start..end - 1]).to_string();
+                        let s = String::from_utf8(buf[start..end - 1].to_vec())?.to_string();
                         dict.insert(key.clone(), Value::String(s));
                     }
                 }
@@ -236,7 +236,7 @@ fn _to_json(conf: &Config, buf: &[u8]) -> Map {
             }
         };
     }
-    serde_json::json!(dict).as_object().unwrap().clone()
+    Ok(serde_json::json!(dict).as_object().unwrap().clone())
     //serde_json::to_string_pretty(&dict).unwrap()
     //serde_json::to_string(&dict).unwrap()
 }
@@ -249,7 +249,7 @@ pub extern "C" fn to_json(
 ) -> *const c_char {
     let conf = unsafe { &*conf_ptr };
     let buf = unsafe { slice::from_raw_parts(buf, buf_len) };
-    let j = _to_json(conf, buf);
+    let j = _to_json(conf, buf).unwrap();
     let s = serde_json::to_string_pretty(&j).unwrap();
     let c_str = CString::new(s).unwrap();
     c_str.into_raw()
@@ -364,13 +364,13 @@ mod identity_tests {
         use super::Map;
         use super::{_from_json, _to_json};
         let json_in: Map = serde_json::from_str(s).unwrap();
-        let json_out = _to_json(&conf, &_from_json(&conf, json_in.clone()));
+        let json_out = _to_json(&conf, &_from_json(&conf, json_in.clone())).unwrap();
         assert_eq!(json_in, json_out);
     }
 
     fn bytes_identity(conf: &Config, bytes_in: Vec<u8>) {
         use super::{_from_json, _to_json};
-        let bytes_out = _from_json(&conf, _to_json(&conf, &bytes_in));
+        let bytes_out = _from_json(&conf, _to_json(&conf, &bytes_in).unwrap());
         assert_eq!(bytes_in, bytes_out);
     }
 
@@ -476,15 +476,27 @@ mod malformed_tests {
     use super::_to_json;
 
     #[test]
-    fn utf8str() {
+    fn utf8str_bad_byte() {
         let conf = c("[a]\ntype = 'utf8str'");
         let mut bytes_in = vec![0x01];
-        bytes_in.extend("hello".bytes());
-        //bytes_in.push(0x00);
-        //bytes_in.push(0x00);
-        //bytes_in.push(0x00);
+        bytes_in.extend("hell".bytes());
+        bytes_in.push(0xc0);
+        bytes_in.extend("o".bytes());
+        bytes_in.push(0x00);
         let json_out = _to_json(&conf, &bytes_in);
-        println!("{:?}", json_out);
-        assert!(false);
+        assert!(json_out.is_err());
     }
+
+    //#[test]
+    //fn utf8str() {
+    //    let conf = c("[a]\ntype = 'utf8str'");
+    //    let mut bytes_in = vec![0x01];
+    //    bytes_in.extend("hello".bytes());
+    //    //bytes_in.push(0x00);
+    //    //bytes_in.push(0x00);
+    //    //bytes_in.push(0x00);
+    //    let json_out = _to_json(&conf, &bytes_in);
+    //    println!("{:?}", json_out);
+    //    assert!(false);
+    //}
 }
