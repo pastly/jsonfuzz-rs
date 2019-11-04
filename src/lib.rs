@@ -11,6 +11,36 @@ use toml::value::{Table, Value};
 type Map = serde_json::map::Map<String, serde_json::value::Value>;
 
 #[derive(Debug)]
+struct MalformedBytes;
+
+impl std::fmt::Display for MalformedBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Byte buffer is malformed")
+    }
+}
+
+impl std::error::Error for MalformedBytes {}
+
+#[derive(Debug)]
+struct NoSuchKey {
+    key: String,
+}
+
+impl NoSuchKey {
+    fn new(k: &str) -> Self {
+        NoSuchKey{ key: String::from(k) }
+    }
+}
+
+impl std::fmt::Display for NoSuchKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "No such key '{}'", self.key)
+    }
+}
+
+impl std::error::Error for NoSuchKey {}
+
+#[derive(Debug)]
 pub enum ValType {
     U8,
     U32,
@@ -66,10 +96,10 @@ impl Config {
     /// Calculate the length, in bytes, of the value matching type val_type. If it is of variable
     /// length (e.g. a null-terminated string), it must start at the beginning of the given buf so
     /// we can use it to determine its length.
-    fn value_len(val_type: &ValType, buf: &[u8]) -> usize {
+    fn value_len(val_type: &ValType, buf: &[u8]) -> Option<usize> {
         match val_type {
-            ValType::I8 | ValType::U8 => 1,
-            ValType::I32 | ValType::U32 => 4,
+            ValType::I8 | ValType::U8 => Some(1),
+            ValType::I32 | ValType::U32 => Some(4),
             ValType::Utf8Str0 => {
                 // a null-terminated string. its length includes the null
                 let mut len = 1;
@@ -77,8 +107,11 @@ impl Config {
                 while buf[i] > 0 {
                     i += 1;
                     len += 1;
+                    if i >= buf.len() {
+                        return None;
+                    }
                 }
-                len
+                Some(len)
             }
         }
     }
@@ -86,10 +119,10 @@ impl Config {
     /// Calculate the start and end byte index of the given key: [start, end). Start is
     /// the index of the first byte and end is the index just after the last byte. Returns Err if
     /// the given key does not exist in the buf
-    fn value_indices(&self, buf: &[u8], key: &str) -> Result<(ValType, usize, usize), ()> {
+    fn value_indices(&self, buf: &[u8], key: &str) -> Result<(ValType, usize, usize), Box<dyn std::error::Error + 'static>> {
         let keys = self.contained_keys(buf);
         if !keys.contains(&String::from(key)) {
-            return Err(());
+            return Err(Box::new(NoSuchKey::new(key)));
         }
         // start will be at least the first byte after all the flag bytes at the front
         let mut start = self.keys().len();
@@ -102,17 +135,23 @@ impl Config {
                 .unwrap(); // assumes validate_config was called which requires valid ValType
             if key_i != key {
                 // if not our key, calculate offset to add to start
-                start += Config::value_len(&val_type, &buf[start..]);
+                start += match Config::value_len(&val_type, &buf[start..]) {
+                    Some(num) => num,
+                    None => return Err(Box::new(MalformedBytes{})),
+                };
                 assert!(start < buf.len());
             } else {
                 // we found our key. Now calculate end
-                let end = start + Config::value_len(&val_type, &buf[start..]);
+                let end = start + match Config::value_len(&val_type, &buf[start..]) {
+                    Some(num) => num,
+                    None => return Err(Box::new(MalformedBytes{})),
+                };
                 assert!(start < buf.len());
                 assert!(end <= buf.len());
                 return Ok((val_type, start, end));
             }
         }
-        Err(())
+        Err(Box::new(NoSuchKey::new(key)))
     }
 
     fn new(table: Table) -> Self {
@@ -231,8 +270,9 @@ fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, Box<dyn std::error::Error 
                     key, dict[&key], val_type, start, end
                 );
             }
-            Err(_) => {
-                eprintln!("Err with key {}", key);
+            Err(e) => {
+                //eprintln!("Err with key {}: {}", key, e);
+                return Err(e);
             }
         };
     }
@@ -483,6 +523,15 @@ mod malformed_tests {
         bytes_in.push(0xc0);
         bytes_in.extend("o".bytes());
         bytes_in.push(0x00);
+        let json_out = _to_json(&conf, &bytes_in);
+        assert!(json_out.is_err());
+    }
+
+    #[test]
+    fn utf8str_no_null() {
+        let conf = c("[a]\ntype = 'utf8str'");
+        let mut bytes_in = vec![0x01];
+        bytes_in.extend("hello".bytes());
         let json_out = _to_json(&conf, &bytes_in);
         assert!(json_out.is_err());
     }
