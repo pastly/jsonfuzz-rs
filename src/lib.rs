@@ -10,7 +10,6 @@ use toml::value::{Table, Value};
 
 type Map = serde_json::map::Map<String, serde_json::value::Value>;
 
-
 #[derive(Debug)]
 enum BytesParseError {
     Malformed(),
@@ -23,15 +22,9 @@ impl std::error::Error for BytesParseError {}
 impl std::fmt::Display for BytesParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BytesParseError::NoSuchKey(key) => {
-                write!(f, "No such key '{}'", key)
-            },
-            BytesParseError::Malformed() => {
-                write!(f, "Malformed bytes buffer")
-            },
-            BytesParseError::FromUtf8Error(e) => {
-                e.fmt(f)
-            },
+            BytesParseError::NoSuchKey(key) => write!(f, "No such key '{}'", key),
+            BytesParseError::Malformed() => write!(f, "Malformed bytes buffer"),
+            BytesParseError::FromUtf8Error(e) => e.fmt(f),
         }
     }
 }
@@ -121,7 +114,11 @@ impl Config {
     /// Calculate the start and end byte index of the given key: [start, end). Start is
     /// the index of the first byte and end is the index just after the last byte. Returns Err if
     /// the given key does not exist in the buf
-    fn value_indices(&self, buf: &[u8], key: &str) -> Result<(ValType, usize, usize), BytesParseError> {
+    fn value_indices(
+        &self,
+        buf: &[u8],
+        key: &str,
+    ) -> Result<(ValType, usize, usize), BytesParseError> {
         let keys = self.contained_keys(buf);
         if !keys.contains(&String::from(key)) {
             return Err(BytesParseError::NoSuchKey(key.to_string()));
@@ -144,10 +141,11 @@ impl Config {
                 assert!(start < buf.len());
             } else {
                 // we found our key. Now calculate end
-                let end = start + match Config::value_len(&val_type, &buf[start..]) {
-                    Some(num) => num,
-                    None => return Err(BytesParseError::Malformed()),
-                };
+                let end = start
+                    + match Config::value_len(&val_type, &buf[start..]) {
+                        Some(num) => num,
+                        None => return Err(BytesParseError::Malformed()),
+                    };
                 assert!(start < buf.len());
                 assert!(end <= buf.len());
                 return Ok((val_type, start, end));
@@ -414,8 +412,8 @@ mod test_utils {
 
 #[cfg(test)]
 mod identity_tests {
-    use super::Config;
     use super::test_utils::c;
+    use super::Config;
 
     fn json_identity(conf: &Config, s: &str) {
         use super::Map;
@@ -531,8 +529,8 @@ mod identity_tests {
 
 #[cfg(test)]
 mod malformed_tests {
-    use super::test_utils::c;
     use super::_to_json;
+    use super::test_utils::c;
 
     #[test]
     fn utf8str_bad_byte() {
