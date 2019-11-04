@@ -76,14 +76,12 @@ impl Config {
         // This needs to have a deterministic order like keys(). Since we pull from keys() and it
         // has a deterministic order, we do too.
         let mut found = vec![];
-        let mut i = 0;
-        for k in self.keys() {
+        for (i, k) in self.keys().into_iter().enumerate() {
             // only bit that determines whether the key is contained in the buf is the last bit of
             // the byte
             if (buf[i] & 0x01) != 0 {
                 found.push(k.clone());
             }
-            i += 1;
         }
         found
     }
@@ -217,15 +215,12 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
             return ptr::null();
         }
     };
-    match validate_config(&conf) {
-        Err(errs) => {
-            for e in errs {
-                eprintln!("{}", e);
-            }
-            return ptr::null();
+    if let Err(errs) = validate_config(&conf) {
+        for e in errs {
+            eprintln!("{}", e);
         }
-        _ => {}
-    };
+        return ptr::null();
+    }
     let conf_box = Box::new(conf);
     Box::into_raw(conf_box)
 }
@@ -246,25 +241,25 @@ fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, BytesParseError> {
                 match val_type {
                     ValType::U8 => {
                         let v = buf[start] as u8;
-                        dict.insert(key.clone(), Value::Integer(v as i64));
+                        dict.insert(key.clone(), Value::Integer(i64::from(v)));
                     }
                     ValType::U32 => {
-                        let v = ((buf[start + 0] as u32) << 24)
-                            | ((buf[start + 1] as u32) << 16)
-                            | ((buf[start + 2] as u32) << 8)
-                            | ((buf[start + 3] as u32) << 0);
-                        dict.insert(key.clone(), Value::Integer(v as i64));
+                        let v = ((u32::from(buf[start])) << 24)
+                            | ((u32::from(buf[start + 1])) << 16)
+                            | ((u32::from(buf[start + 2])) << 8)
+                            | (u32::from(buf[start + 3]));
+                        dict.insert(key.clone(), Value::Integer(i64::from(v)));
                     }
                     ValType::I8 => {
                         let v = buf[start] as i8;
-                        dict.insert(key.clone(), Value::Integer(v as i64));
+                        dict.insert(key.clone(), Value::Integer(i64::from(v)));
                     }
                     ValType::I32 => {
-                        let v = ((buf[start + 0] as i32) << 24)
-                            | ((buf[start + 1] as i32) << 16)
-                            | ((buf[start + 2] as i32) << 8)
-                            | ((buf[start + 3] as i32) << 0);
-                        dict.insert(key.clone(), Value::Integer(v as i64));
+                        let v = ((i32::from(buf[start])) << 24)
+                            | ((i32::from(buf[start + 1])) << 16)
+                            | ((i32::from(buf[start + 2])) << 8)
+                            | (i32::from(buf[start + 3]));
+                        dict.insert(key.clone(), Value::Integer(i64::from(v)));
                     }
                     ValType::Utf8Str0 => {
                         assert_eq!(buf[end - 1], 0x00);

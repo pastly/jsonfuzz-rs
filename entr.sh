@@ -4,7 +4,7 @@ find . -type f \
     -name '*.py' -o \
     -name '*.rs' -o \
     -name 'Cargo*' \
-    | RUST_BACKTRACE=1 entr -c cargo test
+    | entr -c cargo test
 
 # find . -type f \
 #     -name '*.py' -o \
