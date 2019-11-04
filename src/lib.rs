@@ -10,35 +10,37 @@ use toml::value::{Table, Value};
 
 type Map = serde_json::map::Map<String, serde_json::value::Value>;
 
-#[derive(Debug)]
-struct MalformedBytes;
-
-impl std::fmt::Display for MalformedBytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Byte buffer is malformed")
-    }
-}
-
-impl std::error::Error for MalformedBytes {}
 
 #[derive(Debug)]
-struct NoSuchKey {
-    key: String,
+enum BytesParseError {
+    Malformed(),
+    NoSuchKey(String),
+    FromUtf8Error(std::string::FromUtf8Error),
 }
 
-impl NoSuchKey {
-    fn new(k: &str) -> Self {
-        NoSuchKey{ key: String::from(k) }
-    }
-}
+impl std::error::Error for BytesParseError {}
 
-impl std::fmt::Display for NoSuchKey {
+impl std::fmt::Display for BytesParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "No such key '{}'", self.key)
+        match self {
+            BytesParseError::NoSuchKey(key) => {
+                write!(f, "No such key '{}'", key)
+            },
+            BytesParseError::Malformed() => {
+                write!(f, "Malformed bytes buffer")
+            },
+            BytesParseError::FromUtf8Error(e) => {
+                e.fmt(f)
+            },
+        }
     }
 }
 
-impl std::error::Error for NoSuchKey {}
+impl From<std::string::FromUtf8Error> for BytesParseError {
+    fn from(e: std::string::FromUtf8Error) -> Self {
+        BytesParseError::FromUtf8Error(e)
+    }
+}
 
 #[derive(Debug)]
 pub enum ValType {
@@ -119,10 +121,10 @@ impl Config {
     /// Calculate the start and end byte index of the given key: [start, end). Start is
     /// the index of the first byte and end is the index just after the last byte. Returns Err if
     /// the given key does not exist in the buf
-    fn value_indices(&self, buf: &[u8], key: &str) -> Result<(ValType, usize, usize), Box<dyn std::error::Error + 'static>> {
+    fn value_indices(&self, buf: &[u8], key: &str) -> Result<(ValType, usize, usize), BytesParseError> {
         let keys = self.contained_keys(buf);
         if !keys.contains(&String::from(key)) {
-            return Err(Box::new(NoSuchKey::new(key)));
+            return Err(BytesParseError::NoSuchKey(key.to_string()));
         }
         // start will be at least the first byte after all the flag bytes at the front
         let mut start = self.keys().len();
@@ -137,21 +139,21 @@ impl Config {
                 // if not our key, calculate offset to add to start
                 start += match Config::value_len(&val_type, &buf[start..]) {
                     Some(num) => num,
-                    None => return Err(Box::new(MalformedBytes{})),
+                    None => return Err(BytesParseError::Malformed()),
                 };
                 assert!(start < buf.len());
             } else {
                 // we found our key. Now calculate end
                 let end = start + match Config::value_len(&val_type, &buf[start..]) {
                     Some(num) => num,
-                    None => return Err(Box::new(MalformedBytes{})),
+                    None => return Err(BytesParseError::Malformed()),
                 };
                 assert!(start < buf.len());
                 assert!(end <= buf.len());
                 return Ok((val_type, start, end));
             }
         }
-        Err(Box::new(NoSuchKey::new(key)))
+        unreachable!();
     }
 
     fn new(table: Table) -> Self {
@@ -230,7 +232,7 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
     Box::into_raw(conf_box)
 }
 
-fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, Box<dyn std::error::Error + 'static>> {
+fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, BytesParseError> {
     let keys = conf.contained_keys(buf);
     let mut dict: HashMap<String, Value> = HashMap::new();
     for key in keys {
