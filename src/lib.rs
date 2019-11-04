@@ -233,11 +233,18 @@ pub extern "C" fn load_config(fname_in: *const c_char) -> *const Config {
 }
 
 fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, BytesParseError> {
-    let keys = conf.contained_keys(buf);
     let mut dict: HashMap<String, Value> = HashMap::new();
-    for key in keys {
+    // buf starts with conf.keys().len() bytes indicating whether or not each conf key is contained
+    // in the buffer. init last_end to the byte just after those header bytes
+    let mut last_end = conf.keys().len();
+    for key in conf.contained_keys(buf) {
         match conf.value_indices(buf, &key) {
+            // if we fetched the indices of this value okay
             Ok((val_type, start, end)) => {
+                // since we're looking at the keys in order, the first byte better be the same as
+                // the one just after the end of the previous key's value
+                assert!(start == last_end);
+                // based on what type of value it is, do different type of conversions
                 match val_type {
                     ValType::U8 => {
                         let v = buf[start] as u8;
@@ -271,12 +278,20 @@ fn _to_json(conf: &Config, buf: &[u8]) -> Result<Map, BytesParseError> {
                     "{} ({}) is a {:?} at [{}, {})",
                     key, dict[&key], val_type, start, end
                 );
+                // the end that we got must be past the previous end that we stored
+                assert!(end > last_end);
+                last_end = end;
             }
             Err(e) => {
                 //eprintln!("Err with key {}: {}", key, e);
                 return Err(e);
             }
         };
+    }
+    // a well-formed buf will not have any bytes left over at the end
+    if last_end != buf.len() {
+        //eprintln!("last end {} but len {}", last_end, buf.len());
+        return Err(BytesParseError::Malformed());
     }
     Ok(serde_json::json!(dict).as_object().unwrap().clone())
     //serde_json::to_string_pretty(&dict).unwrap()
@@ -334,8 +349,8 @@ fn _from_json(conf: &Config, json: Map) -> Vec<u8> {
             header_buf.push(0x00);
         }
     }
-    eprintln!("{:?}", header_buf);
-    eprintln!("{:?}", body_buf);
+    //eprintln!("{:?}", header_buf);
+    //eprintln!("{:?}", body_buf);
     let mut buf = header_buf;
     buf.append(&mut body_buf);
     buf.shrink_to_fit();
@@ -357,7 +372,7 @@ pub extern "C" fn from_json(
     unsafe {
         *buf_len_out = out.len();
     }
-    eprintln!("{:?}", out);
+    //eprintln!("{:?}", out);
     let ret = out.as_ptr();
     std::mem::forget(out);
     ret
@@ -406,6 +421,8 @@ mod identity_tests {
         use super::Map;
         use super::{_from_json, _to_json};
         let json_in: Map = serde_json::from_str(s).unwrap();
+        let b = _from_json(&conf, json_in.clone());
+        eprintln!("b: {:?}", b);
         let json_out = _to_json(&conf, &_from_json(&conf, json_in.clone())).unwrap();
         assert_eq!(json_in, json_out);
     }
@@ -538,16 +555,59 @@ mod malformed_tests {
         assert!(json_out.is_err());
     }
 
-    //#[test]
-    //fn utf8str() {
-    //    let conf = c("[a]\ntype = 'utf8str'");
-    //    let mut bytes_in = vec![0x01];
-    //    bytes_in.extend("hello".bytes());
-    //    //bytes_in.push(0x00);
-    //    //bytes_in.push(0x00);
-    //    //bytes_in.push(0x00);
-    //    let json_out = _to_json(&conf, &bytes_in);
-    //    println!("{:?}", json_out);
-    //    assert!(false);
-    //}
+    #[test]
+    fn i8_extra() {
+        let conf = c("[a]\ntype = 'i8'");
+        let bytes_start = vec![0x01, 42];
+        // only 256 possibilities ... might as well brute force it for fun
+        for extra in 0x00..=0xff {
+            let mut bytes_in = bytes_start.clone();
+            bytes_in.push(extra);
+            let json_out = _to_json(&conf, &bytes_in);
+            assert!(json_out.is_err());
+        }
+    }
+
+    #[test]
+    fn i32_extra() {
+        let conf = c("[a]\ntype = 'i32'");
+        let bytes_start = vec![0x01, 0, 42, 42, 0];
+        // only 256 possibilities ... might as well brute force it for fun
+        for extra in 0x00..=0xff {
+            let mut bytes_in = bytes_start.clone();
+            bytes_in.push(extra);
+            let json_out = _to_json(&conf, &bytes_in);
+            assert!(json_out.is_err());
+        }
+    }
+
+    #[test]
+    fn utf8str_extra() {
+        let conf = c("[a]\ntype = 'utf8str'");
+        let mut bytes_start = vec![0x01];
+        bytes_start.extend("hello".bytes());
+        bytes_start.push(0x00);
+        // only 256 possibilities ... might as well brute force it for fun
+        for extra in 0x00..=0xff {
+            let mut bytes_in = bytes_start.clone();
+            bytes_in.push(extra);
+            let json_out = _to_json(&conf, &bytes_in);
+            assert!(json_out.is_err());
+        }
+    }
+
+    #[test]
+    fn empty_extra() {
+        for c_str in vec![
+            "",
+            "[a]\ntype = 'u32'",
+            "[a]\ntype = 'u32'\n[b]\ntype = 'i8'",
+            "[a]\ntype = 'u32'\n[b]\ntype = 'i8'\n[c]\ntype = 'utf8str'",
+        ] {
+            let conf = c(c_str);
+            let bytes_in = vec![0x00; conf.keys().len() + 1];
+            let json_out = _to_json(&conf, &bytes_in);
+            assert!(json_out.is_err());
+        }
+    }
 }
